@@ -1,0 +1,309 @@
+import telebot
+from datetime import datetime, timedelta
+from random import choice
+import threading
+import time
+
+token = ""
+bot = telebot.TeleBot(token)
+
+# Список случайных задач
+RANDOM_TASKS = [
+    'Помыть полы',
+    'Выучить Python',
+    'Порешать задачи',
+    'Пойти гулять'
+]
+
+# Словарь для хранения задач по датам
+todos = dict()
+DONE_SYMBOL = '[x]'
+UNDONE_SYMBOL = '[ ]'
+
+# Инструкция по использованию
+HELP = '''
+Список доступных команд:
+* /menu - Показать меню
+* /show <дата> - Напечатать все задачи на заданную дату
+* /todo <дата> <текст задачи> - Добавить задачу
+* /random - Добавить на сегодня случайную задачу
+* /randtask - Показать случайную задачу из списка
+* /done <дата> <номер задачи> - Отметить задачу как выполненную
+* /edit <дата> <номер задачи> <новый текст> - Редактировать задачу
+* /delete <дата> <номер задачи> - Удалить задачу
+* /dates - Показать все даты с задачами
+* /clear - Удалить все задачи
+* /stats <дата> - Показать статистику задач на заданную дату
+* /tomorrow - Показать задачи на завтра
+* /remind <дата> <номер задачи> <время в минутах> - Установить напоминание о задаче
+* /priority <дата> <номер задачи> - Установить приоритет для задачи
+* /help - Напечатать список доступных команд
+'''
+
+# Функция для проверки корректности даты
+def is_valid_date(date_str):
+    try:
+        datetime.strptime(date_str, '%d-%m-%Y')
+        return True
+    except ValueError:
+        return False
+
+# Функция для создания меню
+def create_menu():
+    keyboard = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add(
+        telebot.types.KeyboardButton('/show'),
+        telebot.types.KeyboardButton('/todo'),
+        telebot.types.KeyboardButton('/random'),
+        telebot.types.KeyboardButton('/randtask'),
+        telebot.types.KeyboardButton('/done'),
+        telebot.types.KeyboardButton('/edit'),
+        telebot.types.KeyboardButton('/delete'),
+        telebot.types.KeyboardButton('/dates'),
+        telebot.types.KeyboardButton('/stats'),
+        telebot.types.KeyboardButton('/tomorrow'),
+        telebot.types.KeyboardButton('/clear'),
+        telebot.types.KeyboardButton('/remind'),
+        telebot.types.KeyboardButton('/priority'),
+        telebot.types.KeyboardButton('/help')
+    )
+    return keyboard
+
+# Обработчик команды /start
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.send_message(message.chat.id, "Добро пожаловать! Выберите команду:", reply_markup=create_menu())
+
+# Функция для добавления задачи
+def add_todo(date, task):
+    """Добавляет задачу на указанную дату."""
+    if date not in todos:
+        todos[date] = []
+    todos[date].append(UNDONE_SYMBOL + ' ' + task)
+
+# Функция для получения списка задач
+def get_task_list(date):
+    """Возвращает список задач на указанную дату."""
+    if date in todos:
+        return '\n'.join(f"{i + 1}. {task}" for i, task in enumerate(todos[date]))
+    else:
+        return "Нет задач на эту дату."
+
+# Функция для отправки напоминания
+def send_reminder(chat_id, task, reminder_time):
+    """Отправляет напоминание о задаче через указанный промежуток времени."""
+    time.sleep(reminder_time * 60)  # Задержка в минутах
+    bot.send_message(chat_id, f'Напоминание: {task}')
+
+# Обработчик команды /remind
+@bot.message_handler(commands=['remind'])
+def remind_task(message):
+    msg = bot.send_message(message.chat.id,
+                           "Введите дату и номер задачи для установки напоминания в формате: <дата (DD-MM-YYYY)> <номер задачи> <время в минутах>")
+    bot.register_next_step_handler(msg, process_remind_task)
+
+def process_remind_task(message):
+    try:
+        parts = message.text.split()
+        date = parts[0]
+        task_number = int(parts[1]) - 1
+        reminder_time = int(parts[2])
+        if date in todos and 0 <= task_number < len(todos[date]):
+            task = todos[date][task_number]
+            threading.Thread(target=send_reminder, args=(message.chat.id, task, reminder_time)).start()
+            bot.send_message(message.chat.id, f'Напоминание для задачи "{task}" установлено на {reminder_time} минут.')
+        else:
+            bot.send_message(message.chat.id, "Задача не найдена.")
+    except (ValueError, IndexError):
+        bot.send_message(message.chat.id, "Неверный формат. Используйте: <дата (DD-MM-YYYY)> <номер задачи> <время в минутах>")
+
+# Обработчик команды /priority
+@bot.message_handler(commands=['priority'])
+def set_priority(message):
+    msg = bot.send_message(message.chat.id,
+                           "Введите дату и номер задачи для установки приоритета в формате: <дата (DD-MM-YYYY)> <номер задачи>")
+    bot.register_next_step_handler(msg, process_set_priority)
+
+def process_set_priority(message):
+    try:
+        parts = message.text.split()
+        date = parts[0]
+        task_number = int(parts[1]) - 1
+        if date in todos and 0 <= task_number < len(todos[date]):
+            task = todos[date][task_number]
+            # Устанавливаем приоритет, добавляя символ "!" перед задачей
+            todos[date][task_number] = '!' + task
+            bot.send_message(message.chat.id, f'Приоритет для задачи {task_number + 1} на {date} установлен.')
+        else:
+            bot.send_message(message.chat.id, "Задача не найдена.")
+    except (ValueError, IndexError):
+        bot.send_message(message.chat.id, "Неверный формат. Используйте: <дата (DD-MM-YYYY)> <номер задачи>")
+
+# Обработчик команды /menu
+@bot.message_handler(commands=['menu'])
+def send_menu(message):
+    bot.send_message(message.chat.id, "Выберите команду:", reply_markup=create_menu())
+
+# Обработчик команды /help
+@bot.message_handler(commands=['help'])
+def help_message(message):
+    bot.send_message(message.chat.id, HELP)
+
+# Обработчик команды /random
+@bot.message_handler(commands=['random'])
+def random_task(message):
+    task = choice(RANDOM_TASKS)
+    add_todo(datetime.now().strftime('%d-%m-%Y'), task)  # Добавляем задачу на сегодня
+    bot.send_message(message.chat.id, f'Задача "{task}" добавлена на сегодня')
+
+# Обработчик команды /randtask
+@bot.message_handler(commands=['randtask'])
+def show_random_task(message):
+    task = choice(RANDOM_TASKS)
+    bot.send_message(message.chat.id, f'Случайная задача: "{task}"')
+
+# Обработчик команды /todo
+@bot.message_handler(commands=['todo'])
+def add_task(message):
+    msg = bot.send_message(message.chat.id, "Введите дату и текст задачи в формате: <дата (DD-MM-YYYY)> <текст задачи>")
+    bot.register_next_step_handler(msg, process_todo)
+
+def process_todo(message):
+    try:
+        date_str, task = message.text.split(' ', 1)
+        if not is_valid_date(date_str):
+            bot.send_message(message.chat.id, "Неверный формат даты. Пожалуйста, используйте формат DD-MM-YYYY.")
+            return
+        add_todo(date_str, task)
+        bot.send_message(message.chat.id, f'Задача "{task}" добавлена на {date_str}')
+    except ValueError:
+        bot.send_message(message.chat.id, "Неверный формат. Используйте: <дата (DD-MM-YYYY)> <текст задачи>")
+
+# Обработчик команды /show
+@bot.message_handler(commands=['show'])
+def show_tasks(message):
+    msg = bot.send_message(message.chat.id, "Введите дату для отображения задач в формате: <дата (DD-MM-YYYY)>")
+    bot.register_next_step_handler(msg, process_show_tasks)
+
+def process_show_tasks(message):
+    date = message.text
+    if not is_valid_date(date):
+        bot.send_message(message.chat.id, "Неверный формат даты. Пожалуйста, используйте формат DD-MM-YYYY.")
+        return
+    tasks = get_task_list(date)
+    bot.send_message(message.chat.id, tasks)
+
+# Обработчик команды /done
+@bot.message_handler(commands=['done'])
+def done_task(message):
+    msg = bot.send_message(message.chat.id,
+                           "Введите дату и номер задачи для отметки как выполненной в формате: <дата (DD-MM-YYYY)> <номер задачи>")
+    bot.register_next_step_handler(msg, process_done_task)
+
+def process_done_task(message):
+    try:
+        date_str, task_number = message.text.split()
+        task_number = int(task_number) - 1
+        if not is_valid_date(date_str):
+            bot.send_message(message.chat.id, "Неверный формат даты. Пожалуйста, используйте формат DD-MM-YYYY.")
+            return
+        if date_str in todos and 0 <= task_number < len(todos[date_str]):
+            todos[date_str][task_number] = todos[date_str][task_number].replace(UNDONE_SYMBOL, DONE_SYMBOL)
+            bot.send_message(message.chat.id, f'Задача {task_number + 1} на {date_str} отмечена как выполненная.')
+        else:
+            bot.send_message(message.chat.id, "Задача не найдена.")
+    except (ValueError, IndexError):
+        bot.send_message(message.chat.id, "Неверный формат. Используйте: <дата (DD-MM-YYYY)> <номер задачи>")
+
+# Обработчик команды /edit
+@bot.message_handler(commands=['edit'])
+def edit_task(message):
+    msg = bot.send_message(message.chat.id,
+                           "Введите дату, номер задачи и новый текст в формате: <дата (DD-MM-YYYY)> <номер задачи> <новый текст>")
+    bot.register_next_step_handler(msg, process_edit_task)
+
+def process_edit_task(message):
+    try:
+        parts = message.text.split(' ')
+        date_str = parts[0]
+        task_number = int(parts[1]) - 1
+        new_text = ' '.join(parts[2:])
+        if not is_valid_date(date_str):
+            bot.send_message(message.chat.id, "Неверный формат даты. Пожалуйста, используйте формат DD-MM-YYYY.")
+            return
+        if date_str in todos and 0 <= task_number < len(todos[date_str]):
+            todos[date_str][task_number] = UNDONE_SYMBOL + ' ' + new_text
+            bot.send_message(message.chat.id, f'Задача {task_number + 1} на {date_str} была изменена.')
+        else:
+            bot.send_message(message.chat.id, "Задача не найдена.")
+    except (ValueError, IndexError):
+        bot.send_message(message.chat.id, "Неверный формат. Используйте: <дата (DD-MM-YYYY)> <номер задачи> <новый текст>")
+
+# Обработчик команды /delete
+@bot.message_handler(commands=['delete'])
+def delete_task(message):
+    msg = bot.send_message(message.chat.id, "Введите дату и номер задачи для удаления в формате: <дата (DD-MM-YYYY)> <номер задачи>")
+    bot.register_next_step_handler(msg, process_delete_task)
+
+def process_delete_task(message):
+    try:
+        date_str, task_number = message.text.split()
+        task_number = int(task_number) - 1
+        if not is_valid_date(date_str):
+            bot.send_message(message.chat.id, "Неверный формат даты. Пожалуйста, используйте формат DD-MM-YYYY.")
+            return
+        if date_str in todos and 0 <= task_number < len(todos[date_str]):
+            del todos[date_str][task_number]
+            if not todos[date_str]:  # Удаляем дату, если задач больше нет
+                del todos[date_str]
+            bot.send_message(message.chat.id, f'Задача {task_number + 1} на {date_str} была удалена.')
+        else:
+            bot.send_message(message.chat.id, "Задача не найдена.")
+    except (ValueError, IndexError):
+        bot.send_message(message.chat.id, "Неверный формат. Используйте: <дата (DD-MM-YYYY)> <номер задачи>")
+
+# Обработчик команды /dates
+@bot.message_handler(commands=['dates'])
+def show_dates(message):
+    if todos:
+        dates_list = '\n'.join(todos.keys())
+        bot.send_message(message.chat.id, f'Даты с задачами:\n{dates_list}')
+    else:
+        bot.send_message(message.chat.id, "Нет задач.")
+
+# Обработчик команды /clear
+@bot.message_handler(commands=['clear'])
+def clear_tasks(message):
+    todos.clear()
+    bot.send_message(message.chat.id, "Список задач был полностью очищен.")
+
+# Обработчик команды /stats
+@bot.message_handler(commands=['stats'])
+def stats(message):
+    msg = bot.send_message(message.chat.id, "Введите дату для получения статистики в формате: <дата (DD-MM-YYYY)>")
+    bot.register_next_step_handler(msg, process_stats)
+
+def process_stats(message):
+    date = message.text
+    if not is_valid_date(date):
+        bot.send_message(message.chat.id, "Неверный формат даты. Пожалуйста, используйте формат DD-MM-YYYY.")
+        return
+    if date in todos:
+        total_tasks = len(todos[date])
+        done_tasks = sum(1 for task in todos[date] if DONE_SYMBOL in task)
+        undone_tasks = total_tasks - done_tasks
+        bot.send_message(message.chat.id,
+                         f'На {date}:\nВсего задач: {total_tasks}\nВыполненные: {done_tasks}\nНе выполненные: {undone_tasks}')
+    else:
+        bot.send_message(message.chat.id, "Нет задач на эту дату.")
+
+# Обработчик команды /tomorrow
+@bot.message_handler(commands=['tomorrow'])
+def show_tomorrow_tasks(message):
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime('%d-%m-%Y')
+    tasks = get_task_list(tomorrow)
+    bot.send_message(message.chat.id, tasks)
+
+# Запуск бота
+if __name__ == '__main__':
+    bot.polling(none_stop=True)
